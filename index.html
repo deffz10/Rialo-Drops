@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Falling Coins & Bombs</title>
+  <style>
+    :root {
+      --bg:#0b1020; --fg:#e3e7ef; --accent:#ffd447; --danger:#ff4d4f;
+      --bgimg: url("https://pbs.twimg.com/profile_banners/1925569963009744897/1753814513/1500x500");
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; color: var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+
+    /* Background halaman (di luar canvas) disamakan + efek blur */
+    body::before{
+      content:""; position:fixed; inset:0; z-index:-2;
+      background: var(--bg) center/cover no-repeat fixed;
+    }
+    body::after{
+      content:""; position:fixed; inset:0; z-index:-1;
+      background: var(--bgimg) center/cover no-repeat fixed;
+      filter: blur(14px) brightness(.45) saturate(1.05);
+      transform: scale(1.06);
+    }
+
+    .wrap { display: grid; grid-template-rows: auto 1fr auto; min-height: 100%; }
+    header, footer { padding: 10px 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; opacity: .9; }
+    .btn { background: #171e36; color: var(--fg); border: 1px solid #273055; padding: 8px 12px; border-radius: 12px; cursor: pointer; transition: .15s transform ease, .15s background ease; }
+    .btn:hover { transform: translateY(-1px); background:#1c2545; }
+    .hud { display: flex; gap: 12px; align-items: center; font-weight: 600; }
+    .hud .score { color: var(--accent); }
+    .hud .lives { color: var(--danger); }
+
+    #game { position: relative; display: grid; place-items: center; }
+    canvas { background: #0b1020; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.05); width: min(96vw, 820px); height: min(70vh, 560px); }
+
+    .overlay { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+    .card { pointer-events: auto; background: rgba(10, 14, 32, .9); border: 1px solid #273055; border-radius: 16px; padding: 18px 18px 14px; width: min(92vw, 520px); text-align: center; backdrop-filter: blur(4px); }
+    .title { font-size: 22px; font-weight: 800; margin: 2px 0 6px; }
+    .muted { opacity: .8; font-size: 14px; line-height: 1.4; }
+
+    .touchbar { display:none; gap:10px; justify-content:center; padding:10px; }
+    .tbtn { flex:1; min-width:120px; background:#111633; color:#e9edfb; border:1px solid #273055; padding:12px 16px; border-radius:14px; font-size:16px; }
+    @media (max-width: 768px) { .touchbar { display:flex; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>💰 Rialo Drops & 💣 Bombs</h1>
+      <div class="hud">
+        <div>Skor: <span id="score" class="score">0</span></div>
+        <div>Nyawa: <span id="lives" class="lives">3</span></div>
+        <div>Level: <span id="level">1</span> <span id="ltimer" class="muted" style="margin-left:6px">(0:30)</span></div>
+      </div>
+      <div>
+        <button id="btnToggle" class="btn">Mulai</button>
+        <button id="btnSound" class="btn" title="Suara">🔊</button>
+      </div>
+    </header>
+
+    <main id="game">
+      <canvas id="canvas" width="820" height="560" aria-label="Game Canvas"></canvas>
+      <div class="overlay" id="overlay">
+        <div class="card" id="startCard">
+          <div class="title">Tangkap Logo-Koin, Hindari Bom!</div>
+          <p class="muted">Gerak: ⬅️ ➡️ / A D • Spasi: Jeda • R: Ulang • Sentuh: tombol di bawah.</p>
+          <button id="startBtn" class="btn" style="margin-top:8px">Mulai Game</button>
+        </div>
+      </div>
+    </main>
+
+    <div class="touchbar">
+      <button class="tbtn" id="leftBtn">⬅️ Kiri</button>
+      <button class="tbtn" id="rightBtn">Kanan ➡️</button>
+      <button class="tbtn" id="pauseBtn">⏸️ Jeda</button>
+    </div>
+
+    <footer>
+      <small class="muted">Single-file • Next/Vercel ready • © 2025</small>
+      <small class="muted">Kesulitan naik tiap 10 koin & tiap 30 detik.</small>
+    </footer>
+  </div>
+
+  <script>
+    // ====== CONFIG
+    const COIN_LOGO_URL = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgq4UxKevMcyAv4PsvG_TD3u_wxJm-mTiDblfVh1s34AT0wY1WzzGEYRoMNQ9ntl5awxAQWOV04B33XhZxNGPjx_bj_G9z-YiRvfth6BcI7hzVpzku13uBWlPDkFxLAt-CjPqpQw6L5VVWQjhII0NYC9AIDeT34VXSCK52YLZ6c7eQwMIW4vh-9OC5fZbU/s320/logo_white_transparent.png";
+    const BACKGROUND_URL  = "https://pbs.twimg.com/profile_banners/1925569963009744897/1753814513/1500x500";
+    const COIN_SIZE_SCALE = 2.5; // lebih tegas
+
+    // ===== Utility
+    const rand = (min, max) => Math.random() * (max - min) + min;
+    const clamp = (v,a,b)=> Math.min(b, Math.max(a, v));
+
+    // ===== Audio
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const master = audioCtx.createGain(); master.gain.value = 0.8; master.connect(audioCtx.destination);
+    let soundOn = true;
+    const setMasterMuted = (muted)=> master.gain.linearRampToValueAtTime(muted?0:0.8, audioCtx.currentTime+0.08);
+
+    function beep(freq=440, duration=0.08, type='sine', volume=0.08){
+      if(!soundOn) return;
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type; o.frequency.value = freq; g.gain.value = volume;
+      o.connect(g); g.connect(master);
+      o.start(); setTimeout(()=>{ o.stop(); }, duration*1000);
+    }
+
+    // ---- Musik generatif ringan
+    const music = { started:false, running:false, tempo:96, nodes:{} , loopId:null };
+    function startMusic(){
+      if(music.started){ music.running=true; return; }
+      music.started = true; music.running = true;
+
+      const pad = audioCtx.createOscillator(); pad.type='sine';
+      const padGain = audioCtx.createGain(); padGain.gain.value=0.0;
+      const bass = audioCtx.createOscillator(); bass.type='triangle';
+      const bassGain = audioCtx.createGain(); bassGain.gain.value=0.0;
+      const arpGain = audioCtx.createGain(); arpGain.gain.value=0.0;
+      const filter = audioCtx.createBiquadFilter(); filter.type='lowpass'; filter.frequency.value=1800;
+
+      pad.connect(padGain).connect(filter);
+      bass.connect(bassGain).connect(filter);
+      arpGain.connect(filter);
+      filter.connect(master);
+
+      pad.start(); bass.start();
+      music.nodes = { pad,padGain,bass,bassGain,arpGain,filter };
+
+      const chordSeq = [
+        [261.63, 311.13, 392.00], // Cmin
+        [207.65, 261.63, 329.63], // Ab
+        [174.61, 220.00, 349.23], // F
+        [196.00, 246.94, 392.00], // G
+      ];
+      let chordIndex = 0;
+      const beatMs = 60000 / music.tempo;
+      const eighthMs = beatMs/2;
+
+      const schedule = ()=>{
+        if(!music.running) return;
+        const chord = chordSeq[chordIndex % chordSeq.length];
+        music.nodes.pad.frequency.setValueAtTime(chord[0], audioCtx.currentTime);
+        music.nodes.padGain.gain.linearRampToValueAtTime(0.12, audioCtx.currentTime + 0.2);
+
+        music.nodes.bass.frequency.setValueAtTime(chord[0]/2, audioCtx.currentTime);
+        music.nodes.bassGain.gain.setValueAtTime(0.0, audioCtx.currentTime);
+        music.nodes.bassGain.gain.linearRampToValueAtTime(0.16, audioCtx.currentTime + 0.02);
+        music.nodes.bassGain.gain.linearRampToValueAtTime(0.0, audioCtx.currentTime + 0.26);
+
+        const arpNotes = [chord[0], chord[1], chord[2], chord[1]];
+        for(let i=0;i<arpNotes.length;i++){
+          const t = audioCtx.currentTime + (i * (eighthMs/1000));
+          const osc = audioCtx.createOscillator();
+          const g = audioCtx.createGain();
+          osc.type='square'; osc.frequency.setValueAtTime(arpNotes[i], t);
+          g.gain.setValueAtTime(0, t);
+          g.gain.linearRampToValueAtTime(0.10, t+0.01);
+          g.gain.linearRampToValueAtTime(0, t+0.09);
+          osc.connect(g).connect(music.nodes.arpGain);
+          osc.start(t); osc.stop(t+0.12);
+        }
+
+        music.nodes.filter.frequency.setValueAtTime(1400, audioCtx.currentTime);
+        music.nodes.filter.frequency.linearRampToValueAtTime(2200, audioCtx.currentTime + 0.4);
+
+        chordIndex++;
+        music.loopId = setTimeout(schedule, beatMs*2);
+      };
+
+      music.nodes.padGain.gain.linearRampToValueAtTime(0.12, audioCtx.currentTime + 0.5);
+      music.nodes.arpGain.gain.linearRampToValueAtTime(0.10, audioCtx.currentTime + 0.5);
+      schedule();
+    }
+    function pauseMusic(){
+      music.running=false;
+      if(music.loopId) clearTimeout(music.loopId);
+      if(music.nodes.padGain) music.nodes.padGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime+0.15);
+      if(music.nodes.bassGain) music.nodes.bassGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime+0.10);
+      if(music.nodes.arpGain)  music.nodes.arpGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime+0.10);
+    }
+
+    // ===== Canvas & HUD
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const W = () => canvas.width;
+    const H = () => canvas.height;
+
+    const HUD = {
+      scoreEl: document.getElementById('score'),
+      livesEl: document.getElementById('lives'),
+      levelEl: document.getElementById('level'),
+      timerEl: document.getElementById('ltimer'),
+    };
+
+    const overlay = document.getElementById('overlay');
+
+    // ===== Game State
+    let playing = false; let paused = false; let gameOver = false;
+    let score = 0; let lives = 3; let level = 1;
+
+    // ===== Level Timer
+    const LEVEL_DURATION = 30;
+    let levelTime = LEVEL_DURATION;
+    let levelByTime = 1;
+
+    // ===== Background image (statis)
+    let bgImg=null, bgReady=false;
+    (function preloadBG(){
+      const img = new Image();
+      img.referrerPolicy = "no-referrer";
+      img.onload = ()=>{ bgImg=img; bgReady=true; };
+      img.onerror = ()=>{ console.warn("[bg] gagal load, pakai fallback"); };
+      img.src = BACKGROUND_URL;
+    })();
+
+    // Space dust
+    const dust = [];
+    function initDust(){
+      const layers = [0.2, 0.5, 1.0];
+      for(let l=0;l<3;l++){
+        for(let i=0;i<28;i++){
+          dust.push({
+            x: Math.random()*W(),
+            y: Math.random()*H(),
+            r: rand(0.6, 2.0)*(0.6 + layers[l]),
+            a: rand(0.15, 0.5),
+            vy: rand(10, 30)*layers[l],
+          });
+        }
+      }
+    }
+    initDust();
+
+    // ===== Coin logo preload
+    let coinImg = null, coinImgReady = false;
+    (function preloadCoin(){
+      const img = new Image();
+      img.referrerPolicy = "no-referrer";
+      img.onload = ()=>{ coinImg = img; coinImgReady = true; };
+      img.onerror = ()=>{ console.warn("[coin] gagal load, fallback koin emas"); };
+      img.src = COIN_LOGO_URL;
+    })();
+
+    // ===== Player: ikon orang bawa wadah di atas kepala
+    const player = {
+      x: W()/2,
+      y: H()-60,      // posisi dasar tubuh
+      w: 110,         // lebar tubuh (hitbox umum)
+      h: 100,         // tinggi tubuh
+      bowlW: 120,     // lebar wadah (rim)
+      bowlH: 26,      // tinggi wadah
+      bowlOffsetY: -68, // posisi wadah relatif ke y (di atas kepala)
+      speed: 7,
+      dir: 1,
+      bodyRect(){ // untuk deteksi bom (tubuh)
+        return { x1:this.x - this.w/2, x2:this.x + this.w/2, y1:this.y - this.h/2, y2:this.y + this.h/2 };
+      },
+      bowlRect(){ // untuk menangkap coin (rim wadah)
+        const y = this.y + this.bowlOffsetY;
+        return { x1: this.x - this.bowlW/2, x2: this.x + this.bowlW/2, y1: y - this.bowlH/2, y2: y + this.bowlH/2 };
+      },
+      draw(){
+        // bayangan di tanah
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.beginPath();
+        ctx.ellipse(this.x, this.y + this.h*0.52, this.w*0.38, this.h*0.12, 0, 0, Math.PI*2);
+        ctx.fillStyle = '#000'; ctx.fill();
+        ctx.restore();
+
+        drawHumanCarrier(ctx, this.x, this.y, this.dir, this.w, this.h, this.bowlW, this.bowlH, this.bowlOffsetY);
+      }
+    };
+
+    // ===== Items
+    const items = []; // {x,y,vy,type,rad,rot,rps}
+    let spawnTimer = 0; let spawnEvery = 42;
+
+    // ===== Helpers
+    function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+      if (typeof r === 'number') r = {tl:r, tr:r, br:r, bl:r};
+      ctx.beginPath();
+      ctx.moveTo(x + r.tl, y);
+      ctx.lineTo(x + w - r.tr, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+      ctx.lineTo(x + w, y + h - r.br);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+      ctx.lineTo(x + r.bl, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+      ctx.lineTo(x, y + r.tl);
+      ctx.quadraticCurveTo(x, y, x + r.tl, y);
+      ctx.closePath();
+      if (fill) ctx.fill(); if (stroke) ctx.stroke();
+    }
+    function fmtTime(s){
+      s = Math.max(0, Math.ceil(s));
+      const m = Math.floor(s/60);
+      const ss = String(s%60).padStart(2,'0');
+      return `${m}:${ss}`;
+    }
+    function circleRectHit(cx, cy, r, rect){ // collision coin/bomb dengan rect
+      const closestX = clamp(cx, rect.x1, rect.x2);
+      const closestY = clamp(cy, rect.y1, rect.y2);
+      const dx = cx - closestX, dy = cy - closestY;
+      return (dx*dx + dy*dy) <= r*r;
+    }
+
+    // ===== Human carrier drawing (ikon orang + wadah di atas kepala)
+    function drawHumanCarrier(ctx, cx, cy, dir, w, h, bowlW, bowlH, bowlOffY){
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(dir, 1);
+
+      const t = performance.now()/1000;
+      const sway = Math.sin(t*5)*3; // gerak kecil tangan/ram
+
+      // Torso
+      ctx.save();
+      const torsoGrad = ctx.createLinearGradient(0, -h*0.15, 0, h*0.3);
+      torsoGrad.addColorStop(0, '#1e2a55'); torsoGrad.addColorStop(1, '#0f1838');
+      ctx.fillStyle = torsoGrad;
+      roundRect(ctx, -w*0.22, -h*0.15, w*0.44, h*0.50, 12, true, false);
+      ctx.restore();
+
+      // Head
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(0, -h*0.28, h*0.14, 0, Math.PI*2);
+      const faceGrad = ctx.createLinearGradient(0, -h*0.42, 0, -h*0.16);
+      faceGrad.addColorStop(0, '#f3d7b2'); faceGrad.addColorStop(1, '#e7b98c');
+      ctx.fillStyle = faceGrad; ctx.fill();
+      // hair band
+      ctx.beginPath();
+      ctx.arc(0, -h*0.29, h*0.145, Math.PI*0.95, Math.PI*2.05);
+      ctx.strokeStyle = '#1b2447'; ctx.lineWidth = 6; ctx.stroke();
+      ctx.restore();
+
+      // Arms up (angkat wadah)
+      ctx.save();
+      ctx.translate(0, -h*0.08);
+      ctx.rotate(sway*0.002);
+      ctx.fillStyle = '#e7b98c';
+      // left arm
+      ctx.beginPath();
+      ctx.ellipse(-w*0.28, -h*0.18, w*0.07, h*0.16, -0.7, 0, Math.PI*2);
+      ctx.fill();
+      // right arm
+      ctx.beginPath();
+      ctx.ellipse( w*0.28, -h*0.18, w*0.07, h*0.16,  0.7, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+
+      // Legs (simple)
+      ctx.save();
+      ctx.fillStyle = '#0d1330';
+      ctx.beginPath();
+      roundRect(ctx, -w*0.17, h*0.22, w*0.12, h*0.22, 8, true, false);
+      roundRect(ctx,  w*0.05, h*0.22, w*0.12, h*0.22, 8, true, false);
+      ctx.restore();
+
+      // Bowl above head (catch area)
+      ctx.save();
+      ctx.translate(0, bowlOffY);
+      // shadow below bowl
+      ctx.globalAlpha = 0.25;
+      ctx.beginPath();
+      ctx.ellipse(0, bowlH*0.55, bowlW*0.30, bowlH*0.35, 0, 0, Math.PI*2);
+      ctx.fillStyle = '#000'; ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // bowl body
+      const bowlBodyGrad = ctx.createLinearGradient(0, -bowlH*0.3, 0, bowlH*0.9);
+      bowlBodyGrad.addColorStop(0, '#e9edf7'); bowlBodyGrad.addColorStop(1, '#aab3d6');
+      ctx.fillStyle = bowlBodyGrad;
+      roundRect(ctx, -bowlW/2, 0, bowlW, bowlH, 10, true, false);
+
+      // rim (catch line)
+      ctx.beginPath();
+      ctx.ellipse(0, 0, bowlW*0.50, bowlH*0.45, 0, 0, Math.PI*2);
+      ctx.fillStyle = '#f5f7ff'; ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.28)'; ctx.lineWidth = 1; ctx.stroke();
+
+      // highlight
+      ctx.beginPath();
+      ctx.moveTo(-bowlW*0.25, bowlH*0.18);
+      ctx.quadraticCurveTo(-bowlW*0.05, -bowlH*0.10, bowlW*0.22, bowlH*0.08);
+      ctx.strokeStyle = 'rgba(255,255,255,.45)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.restore();
+    }
+
+    // ===== Input
+    const keys = new Set();
+    window.addEventListener('keydown', e => {
+      if(['ArrowLeft','ArrowRight','a','d','A','D',' ' , 'r','R'].includes(e.key)) e.preventDefault();
+      if(e.key===' ') togglePause();
+      if(e.key==='r' || e.key==='R') restart();
+      if(['ArrowLeft','a','A'].includes(e.key)) keys.add('left');
+      if(['ArrowRight','d','D'].includes(e.key)) keys.add('right');
+    });
+    window.addEventListener('keyup', e => {
+      if(['ArrowLeft','a','A'].includes(e.key)) keys.delete('left');
+      if(['ArrowRight','d','D'].includes(e.key)) keys.delete('right');
+    });
+
+    canvas.addEventListener('mousemove', e => {
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      player.x = clamp(x, player.w/2 + 2, W() - player.w/2 - 2);
+    });
+
+    // Touch buttons
+    const leftBtn = document.getElementById('leftBtn');
+    const rightBtn = document.getElementById('rightBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    let holdLeft=false, holdRight=false;
+    const hold = (el, setter) => {
+      const start = () => setter(true);
+      const end = () => setter(false);
+      el.addEventListener('touchstart', e=>{ e.preventDefault(); start(); });
+      el.addEventListener('touchend', end);
+      el.addEventListener('touchcancel', end);
+      el.addEventListener('mousedown', start);
+      el.addEventListener('mouseup', end);
+      el.addEventListener('mouseleave', end);
+    };
+    hold(leftBtn, v=>holdLeft=v);
+    hold(rightBtn, v=>holdRight=v);
+    pauseBtn.addEventListener('click', togglePause);
+
+    // Buttons
+    const btnToggle = document.getElementById('btnToggle');
+    const btnSound = document.getElementById('btnSound');
+    const startBtn = document.getElementById('startBtn');
+
+    function startGame(){
+      playing = true; paused = false; gameOver=false;
+      overlay.style.display='none';
+      audioCtx.resume?.();
+      startMusic(); setMasterMuted(!soundOn);
+      beep(880,.09,'triangle',.06);
+    }
+    function togglePause(){
+      if(!playing||gameOver) return;
+      paused = !paused;
+      if(!paused){ audioCtx.resume?.(); startMusic(); setMasterMuted(!soundOn); }
+      else { pauseMusic(); }
+      beep(paused?220:660,.08,'sine',.05);
+    }
+    function restart(){
+      score=0; lives=3;
+      level=1; levelByTime = 1; levelTime = LEVEL_DURATION;
+      items.length=0; gameOver=false; paused=false;
+      updateDifficulty(); updateHUD();
+      overlay.style.display='none';
+      audioCtx.resume?.(); startMusic(); setMasterMuted(!soundOn);
+      beep(520,.08,'sawtooth',.05);
+    }
+
+    btnToggle.addEventListener('click', ()=>{ if(!playing){ startGame(); } else { togglePause(); } });
+    btnSound.addEventListener('click', ()=>{ soundOn=!soundOn; btnSound.textContent = soundOn? '🔊' : '🔈'; setMasterMuted(!soundOn); });
+    startBtn.addEventListener('click', startGame);
+
+    function updateHUD(){
+      document.getElementById('score').textContent = score;
+      document.getElementById('lives').textContent = lives;
+      document.getElementById('level').textContent = level;
+      document.getElementById('ltimer').textContent = `(${fmtTime(levelTime)})`;
+    }
+
+    // ===== Difficulty
+    function updateDifficulty(){
+      const levelByScore = Math.floor(score/10)+1;
+      level = Math.max(levelByScore, levelByTime);
+      spawnEvery = Math.max(14, 42 - level*3);
+    }
+
+    // ===== Loop
+    let last = performance.now();
+    function step(now){
+      const dt = (now - last) / 1000; last = now;
+
+      if(playing && !paused && !gameOver){
+        // Timer level
+        levelTime -= dt;
+        if(levelTime <= 0){
+          levelByTime++;
+          levelTime = LEVEL_DURATION;
+          beep(980,.09,'triangle',.07);
+          updateDifficulty(); updateHUD();
+        }
+
+        // Gerak player
+        const left = keys.has('left') || holdLeft;
+        const right = keys.has('right') || holdRight;
+        if(left && !right){ player.x -= player.speed; player.dir = -1; }
+        if(right && !left){ player.x += player.speed; player.dir =  1; }
+        player.x = clamp(player.x, player.w/2 + 2, W() - player.w/2 - 2);
+
+        // Spawn
+        spawnTimer++;
+        if(spawnTimer >= spawnEvery){ spawnItem(); spawnTimer = 0; }
+
+        // Update items + collision
+        for(let i=items.length-1;i>=0;i--){
+          const it = items[i];
+          it.y += it.vy;
+          if(it.type==='coin'){ it.rot += it.rps * dt; }
+
+          const bowlR = player.bowlRect();
+          const bodyR = player.bodyRect();
+
+          if(it.type==='coin'){
+            // coin hanya tertangkap oleh wadah
+            if(circleRectHit(it.x, it.y, it.rad, bowlR)){
+              score++; beep(880,.07,'triangle',.06);
+              items.splice(i,1); updateDifficulty(); updateHUD(); continue;
+            }
+          } else {
+            // bomb kena tubuh atau wadah => hit
+            if(circleRectHit(it.x, it.y, it.rad, bodyR) || circleRectHit(it.x, it.y, it.rad, bowlR)){
+              lives--; beep(120,.15,'square',.08);
+              if(lives<=0){ gameOver = true; showGameOver(); pauseMusic(); }
+              items.splice(i,1); updateHUD(); continue;
+            }
+          }
+
+          // Keluar layar
+          if(it.y - it.rad > H()){
+            if(it.type==='coin'){ if(score>0) score = Math.max(0, score-1); updateDifficulty(); updateHUD(); }
+            items.splice(i,1);
+          }
+        }
+
+        // Update dust
+        for(const p of dust){
+          p.y += p.vy * dt;
+          if(p.y - p.r > H()){ p.y = -p.r; p.x = Math.random()*W(); p.a = rand(0.15,0.5); }
+        }
+      }
+
+      // Render
+      draw();
+      requestAnimationFrame(step);
+    }
+
+    // ===== Spawning & Drawing
+    function spawnItem(){
+      const type = Math.random() < 0.72 ? 'coin' : 'bomb';
+      const rad = type === 'coin' ? rand(12,16) : rand(13,17);
+      const speed = rand(2.2, 3.6) + (level-1)*0.3;
+      const it = { x: rand(20, W()-20), y: -20, vy: speed, type, rad };
+      if(type==='coin'){ it.rot = rand(0, Math.PI*2); it.rps = rand(0.8, 1.6) * (Math.random()<0.5?-1:1); }
+      items.push(it);
+    }
+
+    function drawBG(){
+      // gambar background statis (cover)
+      if(bgImg && bgReady){
+        const cw=W(), ch=H(), iw=bgImg.naturalWidth, ih=bgImg.naturalHeight;
+        const cr = cw/ch, ir = iw/ih;
+        const baseScale = (ir > cr) ? (ch/ih) : (cw/iw);
+        const dw = iw*baseScale, dh = ih*baseScale;
+        const dx = (cw - dw)/2, dy = (ch - dh)/2;
+        ctx.globalAlpha = 0.96;
+        ctx.drawImage(bgImg, dx, dy, dw, dh);
+        ctx.globalAlpha = 1.0;
+      } else { ctx.fillStyle = '#0b1020'; ctx.fillRect(0,0,W(),H()); }
+
+      // Light sweep diagonal (pelan)
+      const t = performance.now()/1000;
+      const g = ctx.createLinearGradient(-W()*0.3 + (t*40)% (W()*1.6), 0, W()*0.5 + (t*40)% (W()*1.6), H());
+      g.addColorStop(0.0, 'rgba(255,255,255,0)');
+      g.addColorStop(0.5, 'rgba(255,255,255,0.06)');
+      g.addColorStop(1.0, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(0,0,W(),H());
+
+      // Vignette
+      const vg = ctx.createRadialGradient(W()/2, H()*0.25, H()*0.2, W()/2, H()/2, H()*0.95);
+      vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.45)');
+      ctx.fillStyle = vg; ctx.fillRect(0,0,W(),H());
+
+      // Space dust
+      for(const p of dust){
+        ctx.globalAlpha = p.a;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+        ctx.fillStyle = '#ffffff'; ctx.fill();
+      }
+      ctx.globalAlpha = 1.0;
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,W(),H());
+      drawBG();
+      player.draw();
+
+      items.forEach(it=>{
+        if(it.type==='coin'){
+          const size = it.rad*2*COIN_SIZE_SCALE;
+          ctx.save();
+          ctx.translate(it.x, it.y);
+          ctx.rotate(it.rot || 0);
+
+          // glow
+          ctx.beginPath(); ctx.arc(0, 0, it.rad*1.12, 0, Math.PI*2);
+          const glow = ctx.createRadialGradient(0,0,it.rad*0.7, 0,0,it.rad*1.12);
+          glow.addColorStop(0, 'rgba(255,255,255,0.02)');
+          glow.addColorStop(1, 'rgba(255,255,255,0.12)');
+          ctx.fillStyle = glow; ctx.fill();
+
+          // medallion
+          const pg = ctx.createRadialGradient(-it.rad*0.2, -it.rad*0.2, it.rad*0.2, 0,0, it.rad);
+          pg.addColorStop(0, '#111736'); pg.addColorStop(1, '#1a2248');
+          ctx.beginPath(); ctx.arc(0,0, it.rad, 0, Math.PI*2); ctx.fillStyle = pg; ctx.fill();
+
+          // ring
+          ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,255,255,.25)';
+          ctx.beginPath(); ctx.arc(0,0, it.rad-0.8, 0, Math.PI*2); ctx.stroke();
+
+          // logo rialo
+          ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 1;
+          if(coinImg && coinImgReady){ ctx.drawImage(coinImg, -size/2, -size/2, size, size); }
+          else {
+            ctx.fillStyle = '#fff'; ctx.font = `${it.rad}px system-ui, sans-serif`;
+            ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('R',0,0);
+          }
+
+          // inner ring
+          ctx.shadowBlur = 0; ctx.beginPath(); ctx.arc(0,0, it.rad*0.62, 0, Math.PI*2);
+          ctx.strokeStyle = 'rgba(255,255,255,.15)'; ctx.lineWidth = 1; ctx.stroke();
+
+          ctx.restore();
+        } else {
+          // ====== BOM dengan efek merah ======
+          const t = performance.now()/1000;
+          const pulse = 0.5 + 0.5*Math.sin(t*6 + it.x*0.01); // 0..1
+          const aura = it.rad*1.8 + Math.sin(t*8)*1.0;
+
+          // red aura
+          const ag = ctx.createRadialGradient(it.x, it.y, it.rad*0.6, it.x, it.y, aura);
+          ag.addColorStop(0, `rgba(255,60,60,${0.20 + 0.15*pulse})`);
+          ag.addColorStop(1, 'rgba(255,0,0,0)');
+          ctx.fillStyle = ag;
+          ctx.beginPath(); ctx.arc(it.x, it.y, aura, 0, Math.PI*2); ctx.fill();
+
+          // body
+          const g = ctx.createRadialGradient(it.x-2, it.y-2, 2, it.x, it.y, it.rad);
+          g.addColorStop(0, `rgba(120,60,60,1)`); // ada tint merah
+          g.addColorStop(1, '#0f111a');
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(it.x, it.y, it.rad, 0, Math.PI*2); ctx.fill();
+
+          // fuse (sumbu) + percikan merah/kuning
+          ctx.save();
+          ctx.strokeStyle = '#b88b4a'; ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(it.x+it.rad*0.3, it.y-it.rad*0.6);
+          ctx.quadraticCurveTo(it.x+it.rad*0.6, it.y-it.rad*1.0, it.x+it.rad*0.9, it.y-it.rad*1.2);
+          ctx.stroke();
+
+          // percikan
+          const fx = it.x+it.rad*0.9, fy = it.y-it.rad*1.2;
+          ctx.fillStyle = 'rgba(255,180,60,0.9)';
+          ctx.beginPath(); ctx.arc(fx, fy, 3.5 + 1.5*pulse, 0, Math.PI*2); ctx.fill();
+          ctx.fillStyle = 'rgba(255,60,60,0.6)';
+          ctx.beginPath(); ctx.arc(fx+rand(-3,3), fy+rand(-3,3), 2.2, 0, Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(fx+rand(-3,3), fy+rand(-3,3), 1.6, 0, Math.PI*2); ctx.fill();
+          ctx.restore();
+
+          // outline halus
+          ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.arc(it.x, it.y, it.rad, 0, Math.PI*2); ctx.stroke();
+        }
+      });
+
+      if(gameOver){
+        ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0,0,W(),H());
+      }
+    }
+
+    function showGameOver(){
+      overlay.style.display='grid';
+      overlay.innerHTML = `<div class="card"><div class="title">Game Over</div>
+        <p class="muted">Skor kamu: <b>${score}</b> • Level: <b>${level}</b></p>
+        <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:8px;">
+          <button class="btn" onclick="restart()">Main Lagi (R)</button>
+          <button class="btn" onclick="shareScore()">Bagikan Skor</button>
+        </div></div>`;
+    }
+
+    window.shareScore = function(){
+      const text = `Aku dapat skor ${score} di Falling Coins & Bombs! 💰💣 Coba kalahkan!`;
+      if(navigator.share){ navigator.share({ text, title: 'Skor Game' }); }
+      else { navigator.clipboard.writeText(text); alert('Tersalin ke clipboard!'); }
+    }
+
+    // ===== Start
+    updateDifficulty(); updateHUD();
+    requestAnimationFrame(step);
+  </script>
+</body>
+</html>
